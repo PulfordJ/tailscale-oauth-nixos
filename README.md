@@ -25,8 +25,21 @@ You need to create OAuth credentials in your Tailscale admin console:
 
 1. Go to [Tailscale Admin Console](https://login.tailscale.com/admin/settings/oauth)
 2. Generate OAuth Client credentials
-3. Note down the Client ID and Client Secret
-4. Create appropriate tags in your Tailscale ACL (e.g., `tag:media-center`)
+3. Configure the required scopes (see below)
+4. Note down the Client ID and Client Secret
+5. Create appropriate tags in your Tailscale ACL (e.g., `tag:media-center`)
+
+### Required OAuth Scopes
+
+When creating your OAuth client credentials, configure the following scopes under **Settings → OAuth Clients → [Your Client] → Scopes**:
+
+- **Devices → Core**: Select **Read & Write** (or just Write)
+  - This gives your machine the permission it needs to register itself and modify its own device properties on your Tailnet.
+
+- **Keys → Auth Keys**: Select **Read & Write** (or just Write)
+  - Because you are passing an OAuth client secret directly to the Tailscale daemon, the daemon uses this permission behind the scenes to silently generate a short-lived standard auth key for the initial login.
+
+Once configured, use the resulting **Client ID** and **Client Secret** in the module configuration as shown in the Usage section below.
 
 ## Usage
 
