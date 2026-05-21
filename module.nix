@@ -64,8 +64,13 @@ in {
       wants = [ "network-online.target" "tailscale.service" ];
       wantedBy = [ "multi-user.target" ];
 
-      # Set this service as a oneshot job
-      serviceConfig.Type = "oneshot";
+      serviceConfig = {
+        Type = "oneshot";
+        Restart = "on-failure";
+        RestartSec = "10s";
+        StartLimitIntervalSec = "120s";
+        StartLimitBurst = 10;
+      };
 
       # Shell script to handle OAuth authentication
       script = with pkgs; ''
@@ -86,7 +91,7 @@ in {
 
         # Get OAuth access token
         echo "Getting OAuth access token..."
-        OAUTH_RESPONSE=$(${curl}/bin/curl --fail-with-body -d "client_id=$CLIENT_ID" \
+        OAUTH_RESPONSE=$(${curl}/bin/curl -s --fail-with-body -d "client_id=$CLIENT_ID" \
           -d "client_secret=$CLIENT_SECRET" \
           https://api.tailscale.com/api/v2/oauth/token 2>&1)
         CURL_EXIT=$?
@@ -113,7 +118,7 @@ in {
 
         TAGS_JSON=$(echo '${builtins.toJSON cfg.tags}' | ${jq}/bin/jq -c '.')
 
-        AUTH_KEY_RESPONSE=$(${curl}/bin/curl --fail-with-body -X POST \
+        AUTH_KEY_RESPONSE=$(${curl}/bin/curl -s --fail-with-body -X POST \
           -H "Authorization: Bearer $ACCESS_TOKEN" \
           -H "Content-Type: application/json" \
           -d "{\"capabilities\":{\"devices\":{\"create\":{\"reusable\":false,\"ephemeral\":true,\"preauthorized\":true,\"tags\":$TAGS_JSON}}},\"expirySeconds\":${toString cfg.authKeyExpirySeconds}}" \
