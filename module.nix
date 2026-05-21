@@ -49,7 +49,8 @@ in {
 
     # Configure tailscaled to start after routing service
     systemd.services.tailscaled = {
-      after = mkIf (config.systemd.services ? tailscale-routing) [ "tailscale-routing.service" ];
+      after = [ "network-online.target" ]
+        ++ lib.optional (config.systemd.services ? tailscale-routing) "tailscale-routing.service";
       requires = [ "network-online.target" ];
     };
 
@@ -58,9 +59,9 @@ in {
       enable = true;
       description = "Automatic connection to Tailscale using OAuth";
 
-      # Make sure tailscale is running before trying to connect
-      after = [ "network-pre.target" "tailscale.service" ];
-      wants = [ "network-pre.target" "tailscale.service" ];
+      # Make sure tailscale is running and internet is reachable before connecting
+      after = [ "network-online.target" "tailscale.service" ];
+      wants = [ "network-online.target" "tailscale.service" ];
       wantedBy = [ "multi-user.target" ];
 
       # Set this service as a oneshot job
@@ -85,9 +86,15 @@ in {
 
         # Get OAuth access token
         echo "Getting OAuth access token..."
-        OAUTH_RESPONSE=$(${curl}/bin/curl -s -d "client_id=$CLIENT_ID" \
+        OAUTH_RESPONSE=$(${curl}/bin/curl --fail-with-body -d "client_id=$CLIENT_ID" \
           -d "client_secret=$CLIENT_SECRET" \
-          https://api.tailscale.com/api/v2/oauth/token)
+          https://api.tailscale.com/api/v2/oauth/token 2>&1)
+        CURL_EXIT=$?
+        echo "curl exit=$CURL_EXIT response=$OAUTH_RESPONSE"
+        if [ $CURL_EXIT -ne 0 ]; then
+          echo "curl failed getting OAuth token (exit $CURL_EXIT)"
+          exit 6
+        fi
 
         ACCESS_TOKEN=$(echo "$OAUTH_RESPONSE" | ${jq}/bin/jq -r '.access_token')
 
@@ -106,11 +113,17 @@ in {
 
         TAGS_JSON=$(echo '${builtins.toJSON cfg.tags}' | ${jq}/bin/jq -c '.')
 
-        AUTH_KEY_RESPONSE=$(${curl}/bin/curl -s -X POST \
+        AUTH_KEY_RESPONSE=$(${curl}/bin/curl --fail-with-body -X POST \
           -H "Authorization: Bearer $ACCESS_TOKEN" \
           -H "Content-Type: application/json" \
           -d "{\"capabilities\":{\"devices\":{\"create\":{\"reusable\":false,\"ephemeral\":true,\"preauthorized\":true,\"tags\":$TAGS_JSON}}},\"expirySeconds\":${toString cfg.authKeyExpirySeconds}}" \
-          "https://api.tailscale.com/api/v2/tailnet/-/keys")
+          "https://api.tailscale.com/api/v2/tailnet/-/keys" 2>&1)
+        CURL_EXIT=$?
+        echo "curl exit=$CURL_EXIT response=$AUTH_KEY_RESPONSE"
+        if [ $CURL_EXIT -ne 0 ]; then
+          echo "curl failed generating auth key (exit $CURL_EXIT)"
+          exit 1
+        fi
 
         AUTH_KEY=$(echo "$AUTH_KEY_RESPONSE" | ${jq}/bin/jq -r '.key')
 
