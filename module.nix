@@ -41,6 +41,12 @@ in {
       default = true;
       description = "Whether to add tailscale0 to trusted firewall interfaces";
     };
+
+    advertiseRoutes = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = "Subnets to advertise as Tailscale subnet routes";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -141,7 +147,40 @@ in {
         echo "Successfully generated ephemeral auth key"
 
         # Authenticate with tailscale
-        ${tailscale}/bin/tailscale up --authkey "$AUTH_KEY" ${optionalString cfg.advertiseExitNode "--advertise-exit-node"}
+        ${tailscale}/bin/tailscale up --authkey "$AUTH_KEY" ${optionalString cfg.advertiseExitNode "--advertise-exit-node"} ${optionalString (cfg.advertiseRoutes != []) "--advertise-routes=${concatStringsSep "," cfg.advertiseRoutes}"}
+      '';
+    };
+
+    # tailscale-autoconnect only runs `tailscale up` on first auth (it exits
+    # early once BackendState is "Running"), so advertised routes need to be
+    # (re-)applied on every boot via `tailscale set` instead.
+    systemd.services.tailscale-set-routes = mkIf (cfg.advertiseRoutes != []) {
+      enable = true;
+      description = "Ensure Tailscale advertised routes are set";
+
+      after = [ "network-online.target" "tailscale.service" "tailscale-autoconnect.service" ];
+      wants = [ "network-online.target" "tailscale.service" ];
+      wantedBy = [ "multi-user.target" ];
+
+      serviceConfig = {
+        Type = "oneshot";
+        Restart = "on-failure";
+        RestartSec = "10s";
+        StartLimitIntervalSec = "120s";
+        StartLimitBurst = 10;
+      };
+
+      script = with pkgs; ''
+        set -x
+
+        # Wait for tailscaled to be authenticated and running before setting routes
+        for i in $(seq 1 30); do
+          status="$(${tailscale}/bin/tailscale status -json | ${jq}/bin/jq -r .BackendState)"
+          [ "$status" = "Running" ] && break
+          sleep 2
+        done
+
+        ${tailscale}/bin/tailscale set --advertise-routes=${concatStringsSep "," cfg.advertiseRoutes}
       '';
     };
 
