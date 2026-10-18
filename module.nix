@@ -47,6 +47,19 @@ in {
       default = [];
       description = "Subnets to advertise as Tailscale subnet routes";
     };
+
+    reauthCheckInterval = mkOption {
+      type = types.nullOr types.str;
+      default = "5min";
+      description = ''
+        How often to check whether tailscaled has been logged out
+        (BackendState "NeedsLogin") and, if so, re-run the OAuth
+        autoconnect. Ephemeral nodes are deleted by Tailscale a while after
+        going offline, so a machine that stays up through a long network
+        outage otherwise never rejoins until rebooted. A systemd time span,
+        or null to disable the check.
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
@@ -70,12 +83,15 @@ in {
       wants = [ "network-online.target" "tailscale.service" ];
       wantedBy = [ "multi-user.target" ];
 
+      # Keep retrying for as long as it takes (e.g. booting before the
+      # router/internet is back after a power cut) rather than hitting
+      # systemd's start limit and giving up until the next boot.
+      unitConfig.StartLimitIntervalSec = 0;
+
       serviceConfig = {
         Type = "oneshot";
         Restart = "on-failure";
         RestartSec = "10s";
-        StartLimitIntervalSec = "120s";
-        StartLimitBurst = 10;
       };
 
       # Shell script to handle OAuth authentication
@@ -182,6 +198,34 @@ in {
 
         ${tailscale}/bin/tailscale set --advertise-routes=${concatStringsSep "," cfg.advertiseRoutes}
       '';
+    };
+
+    # tailscale-autoconnect only runs at boot. Ephemeral nodes are deleted by
+    # Tailscale a while after going offline, so if the machine stays up
+    # through a long network outage, tailscaled comes back to a deleted
+    # node, sits in NeedsLogin, and nothing re-authenticates it until a
+    # reboot. Re-run the autoconnect when -- and only when -- tailscaled is
+    # in NeedsLogin: a node that is merely offline stays "Running", and
+    # re-keying it would create a duplicate device with a new address.
+    systemd.services.tailscale-reauth-check = mkIf (cfg.reauthCheckInterval != null) {
+      description = "Re-run tailscale-autoconnect if tailscaled has been logged out";
+      after = [ "tailscaled.service" ];
+      serviceConfig.Type = "oneshot";
+      script = with pkgs; ''
+        state="$(${tailscale}/bin/tailscale status -json | ${jq}/bin/jq -r .BackendState)"
+        if [ "$state" = "NeedsLogin" ]; then
+          echo "tailscaled is in NeedsLogin, re-running tailscale-autoconnect"
+          ${systemd}/bin/systemctl start --no-block tailscale-autoconnect.service
+        fi
+      '';
+    };
+
+    systemd.timers.tailscale-reauth-check = mkIf (cfg.reauthCheckInterval != null) {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = cfg.reauthCheckInterval;
+        OnUnitActiveSec = cfg.reauthCheckInterval;
+      };
     };
 
     # Add tailscale0 to trusted firewall interfaces if requested

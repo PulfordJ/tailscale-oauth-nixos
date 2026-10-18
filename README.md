@@ -5,7 +5,7 @@ A NixOS module that provides automatic Tailscale authentication using OAuth clie
 ## Features
 
 - OAuth-based authentication with dynamically generated ephemeral keys
-- Automatic reconnection on boot
+- Automatic reconnection on boot, and after the ephemeral node is removed while offline
 - Configurable device tags
 - Optional exit node advertisement
 - Firewall configuration
@@ -18,6 +18,9 @@ A NixOS module that provides automatic Tailscale authentication using OAuth clie
 3. The access token is used to generate an ephemeral, pre-authorized auth key
 4. The device authenticates using the generated key
 5. Optionally advertises as an exit node
+6. Every `reauthCheckInterval`, if tailscaled has been logged out (`NeedsLogin`), steps 2–4 run again.
+   Tailscale deletes ephemeral nodes a while after they go offline, so without this a machine that stayed
+   up through a long network outage would not rejoin until rebooted.
 
 ## Prerequisites
 
@@ -133,6 +136,18 @@ You can also import the module directly:
 - Default: `true`
 - Description: Whether to add `tailscale0` to trusted firewall interfaces
 
+### `services.tailscale-oauth.advertiseRoutes`
+- Type: `list of strings`
+- Default: `[]`
+- Description: Subnets to advertise as Tailscale subnet routes
+
+### `services.tailscale-oauth.reauthCheckInterval`
+- Type: `null or string` (systemd time span)
+- Default: `"5min"`
+- Description: How often to check for a logged-out tailscaled (`NeedsLogin`) and re-run the OAuth
+  autoconnect. Only acts on `NeedsLogin`, so a node that is merely offline is never re-keyed into a
+  duplicate device. Set to `null` to disable.
+
 ## Security Considerations
 
 - The OAuth client secret is stored in the Nix store, which is world-readable
@@ -162,6 +177,7 @@ systemctl status tailscale-autoconnect
 View service logs:
 ```bash
 journalctl -u tailscale-autoconnect -f
+journalctl -u tailscale-reauth-check
 ```
 
 Check Tailscale status:
